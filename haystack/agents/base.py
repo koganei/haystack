@@ -126,32 +126,13 @@ class ToolsManager:
         self,
         tools: Optional[List[Tool]] = None,
         tool_pattern: str = r'Tool:\s*(\w+)\s*Tool Input:\s*("?)([^"\n]+)\2\s*',
-        reasoning_error_handler: Optional[Callable] = None,
     ):
         """
         :param tools: A list of tools to add to the ToolManager. Each tool must have a unique name.
-        :param tool_pattern: A regular expression pattern that matches the text that the Agent generates to invoke
-            a tool.
-        :param reasoning_error_handler: A function that handles errors that occur when the Agent is wrongly reasoning
-        about tools. It's a recovery mechanism that allows the Agent to recover from errors. The function takes the LLM
-        response as input and returns a string that the Agent should use to attempt to recover from the error.
+        :param tool_pattern: A regular expression pattern that matches the text that the Agent generates to invoke a
         """
         self.tools = {tool.name: tool for tool in tools} if tools else {}
         self.tool_pattern = tool_pattern
-        if not reasoning_error_handler:
-
-            def default_handler(tool: str, tool_input: str, llm_response: str):
-                return (
-                    f"AI agent response should be either: \n"
-                    f"1) Final Answer: <insert any reasonable answer here>"
-                    f"2) Another attempt to use a tool with different input."
-                    f"Detect if AI Agent is repeating itself. If so, provide final answer now in the format:\n"
-                    f"Final Answer: <insert any reasonable answer here>"
-                )
-
-            self.reasoning_error_handler = default_handler
-        else:
-            self.reasoning_error_handler = reasoning_error_handler
         self.callback_manager = Events(("on_tool_start", "on_tool_finish", "on_tool_error"))
 
     def add_tool(self, tool: Tool):
@@ -194,24 +175,29 @@ class ToolsManager:
         tool_result: str = ""
         if self.has_tools():
             tool_name, tool_input = self.extract_tool_name_and_tool_input(llm_response)
-            if tool_name and tool_input:
-                tool: Tool = self.tools[tool_name]
-                try:
-                    self.callback_manager.on_tool_start(tool_input, tool=tool)
-                    tool_result, unprocessed_tool_result = tool.run(tool_input, params)
-                    self.callback_manager.on_tool_finish(
-                        tool_result,
-                        observation_prefix="Observation: ",
-                        llm_prefix="Thought: ",
-                        color=tool.logging_color,
-                        tool_name=tool_name,
-                        unprocessed_tool_result=unprocessed_tool_result
-                    )
-                except Exception as e:
-                    self.callback_manager.on_tool_error(e, tool=self.tools[tool_name])
-                    raise e
-            else:
-                tool_result = self.reasoning_error_handler(tool_name, tool_input, llm_response)
+            if tool_name is None or tool_input is None:
+                raise AgentError(
+                    f"Could not identify the next tool or input for that tool from Agent's output. "
+                    f"Adjust the Agent's param 'tool_pattern' or 'prompt_template'. \n"
+                    f"# 'tool_pattern' to identify next tool: {self.tool_pattern} \n"
+                    f"# llm_response:\n{llm_response}"
+                )
+            if not self.has_tool(tool_name):
+                raise AgentError(
+                    f"The tool {tool_name} wasn't added to the Agent tools: {self.tools.keys()}."
+                    "Add the tool using `add_tool()` or include it in the parameter `tools` when initializing the Agent."
+                    f"llm_response :\n{llm_response}"
+                )
+            tool: Tool = self.tools[tool_name]
+            try:
+                self.callback_manager.on_tool_start(tool_input, tool=tool)
+                tool_result = tool.run(tool_input, params)
+                self.callback_manager.on_tool_finish(
+                    tool_result, observation_prefix="Observation: ", llm_prefix="Thought: ", color=tool.logging_color
+                )
+            except Exception as e:
+                self.callback_manager.on_tool_error(e, tool=self.tools[tool_name])
+                raise e
         return tool_result
 
     def extract_tool_name_and_tool_input(self, llm_response: str) -> Tuple[Optional[str], Optional[str]]:
@@ -311,8 +297,6 @@ class Agent:
         self.tm = tools_manager if tools_manager else ToolsManager()
         self.memory = memory if memory else NoMemory()
         self.callback_manager = Events(("on_agent_start", "on_agent_step", "on_agent_finish", "on_new_token"))
-        self.trg = ToolResultsGatherer(self.callback_manager, self.tm.callback_manager)
-        self.tool_results = []
         self.prompt_node = prompt_node
         resolved_prompt_template = prompt_node.get_prompt_template(prompt_template)
         if not resolved_prompt_template:
@@ -555,35 +539,4 @@ class ConversationalAgent(Agent):
                 lambda query, agent, **kwargs: {"query": query, "history": agent.memory.load(keys=["history"])}
             ),
             final_answer_pattern=final_answer_pattern if final_answer_pattern else BasicAnswerParser(),
-        )
-
-
-class ConversationalAgentWithTools(Agent):
-    def __init__(
-        self,
-        prompt_node: PromptNode,
-        prompt_template: Union[str, PromptTemplate] = None,
-        tools_manager: Optional[ToolsManager] = None,
-        max_steps: int = 5,
-        memory: Memory = None,
-        prompt_parameters_resolver: Optional[Union[PromptParametersResolver, Callable]] = None,
-        final_answer_pattern: Union[str, AgentAnswerParser] = r"Final Answer\s*:\s*(.*)",
-    ):
-        super().__init__(
-            prompt_node=prompt_node,
-            prompt_template=prompt_template,
-            tools_manager=tools_manager,
-            max_steps=max_steps,
-            memory=memory if memory else NoMemory(),
-            prompt_parameters_resolver=prompt_parameters_resolver
-            if prompt_parameters_resolver
-            else CallableResolver(
-                lambda query, agent, agent_step, **kwargs: {
-                    "query": query,
-                    "tool_names_with_descriptions": agent.tm.get_tool_names_with_descriptions(),
-                    "transcript": agent_step.transcript,
-                    "history": agent.memory.load(keys=["history"]),
-                }
-            ),
-            final_answer_pattern=final_answer_pattern,
         )
