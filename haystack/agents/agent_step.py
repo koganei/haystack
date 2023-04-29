@@ -36,7 +36,6 @@ class AgentStep:
         self.final_answer_parser = final_answer_parser
         self.prompt_node_response = prompt_node_response
         self.transcript = transcript
-        self.tool_results = []
 
     def create_next_step(self, prompt_node_response: Any, current_step: Optional[int] = None) -> AgentStep:
         """
