@@ -268,9 +268,14 @@ class PromptTemplate(BasePromptTemplate, ABC):
                 if param in kwargs:
                     params_dict[param] = kwargs[param]
 
-        if set(params_dict.keys()) != set(self.prompt_params):
-            available_params = set(list(params_dict.keys()) + list(set(kwargs.keys())))
-            raise ValueError(f"Expected prompt parameters {self.prompt_params} but got {list(available_params)}.")
+        if not set(self.prompt_params).issubset(params_dict.keys()):
+            available_params = {*params_dict.keys(), *kwargs.keys()}
+            provided = set(self.prompt_params).intersection(available_params)
+            message = f"only {list(provided)}" if provided else "none of these parameters"
+            raise ValueError(
+                f"Expected prompt parameters {self.prompt_params} to be provided but got "
+                f"{message}. Make sure to provide all template parameters."
+            )
 
         template_dict = {"_at_least_one_prompt": True}
         for id, call in self._prompt_params_functions.items():
@@ -442,5 +447,15 @@ def get_predefined_prompt_templates() -> List[PromptTemplate]:
                         important information:
                         {chat_transcript}
                         Condensed Transcript:""",
+        ),
+        PromptTemplate(
+            name="self-reflection-tools",
+            prompt_text="""You are an advanced reasoning agent that can improve based on self refection. You will be given a previous reasoning trial in which you were given access to the following tools {tool_names} and a question to answer.\nYou were unsuccessful in answering the question either because you used wrong search tool and/or input, or you guessed the wrong final answer. In a few sentences, diagnose a possible reason for failure and devise a new, concise and concrete plan that aims to mitigate the failure. Conclude your plan with a selected Tool and a new Tool Input or a Final Answer depending on the situation. Use complete sentences.\nHere are some examples:\n{examples}\nPrevious trial:\nQuestion: {query}\n{transcript}\n\n
+            Reflection:""",
+        ),
+        PromptTemplate(
+            name="self-reflection-no-tools",
+            prompt_text="""You are an advanced reasoning agent that can improve based on self refection. You will be given a previous reasoning trial in which you were given and question to answer.\nYou were unsuccessful in answering the question either because you guessed the wrong final answer, or you used up your set number of reasoning steps. In a few sentences, diagnose a possible reason for failure and devise a new, concise,and concrete plan that aims to mitigate the same failure. Use complete sentences.\nHere are some examples:\n{examples}\nPrevious trial:\nQuestion: {query}\n{transcript}\n\n
+                Reflection:""",
         ),
     ]
